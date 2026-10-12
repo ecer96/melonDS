@@ -9,12 +9,15 @@
 #include "NDSCart.h"
 #include "GPU.h"
 #include "GPU_Soft.h"
+#include "GPU_OpenGL.h"
+#include "GPU_OpenGL.h"
 #include "SPU.h"
 #include "SPI_Firmware.h"
 
 #include "video.h"
 #include "input.h"
 #include "audio.h"
+#include "menu_commands.h"
 
 #include <SDL2/SDL.h>
 
@@ -77,10 +80,7 @@ int main(int argc, char** argv)
     args.Firmware = melonDS::Firmware(0);
     auto nds = std::make_unique<NDS>(std::move(args));
 
-    // 2. SetRenderer ANTES de Reset
-    nds->SetRenderer(std::make_unique<melonDS::SoftRenderer>(*nds));
-
-    // 3. Cargar la ROM
+    // 2. Cargar la ROM
     u32 rom_len = 0;
     auto rom_data = LoadFile(rom_path, rom_len);
     if (!rom_data) {
@@ -115,6 +115,26 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // Init EGL/GLES
+    bool use_gl = video.InitEGL();
+    if (use_gl) {
+        Platform::Log(Platform::LogLevel::Info, "Usando GLRenderer (compute)");
+        auto glr = std::make_unique<melonDS::GLRenderer>(*nds, true);
+        nds->SetRenderer(std::move(glr));
+        melonDS::RendererSettings settings = {};
+        settings.ScaleFactor = 2;
+        settings.Threaded = false;
+        settings.HiresCoordinates = true;
+        settings.BetterPolygons = false;
+        nds->GetRenderer().SetRenderSettings(settings);
+    } else {
+        Platform::Log(Platform::LogLevel::Warn, "EGL fallo, usando SoftRenderer");
+        nds->SetRenderer(std::make_unique<melonDS::SoftRenderer>(*nds));
+    }
+
+    // Reset despues de setear el renderer (necesario para GLRenderer)
+    nds->Reset();
+
     Input input;
     if (!input.Init()) {
         Platform::Log(Platform::LogLevel::Error, "Input::Init fallo");
@@ -126,6 +146,9 @@ int main(int argc, char** argv)
         Platform::Log(Platform::LogLevel::Error, "Audio::Init fallo");
         return 1;
     }
+
+    // Inicializar el sistema de comandos del menu
+    InitMenuCommands(*nds);
 
     Platform::Log(Platform::LogLevel::Info, "Todo inicializado. Corriendo...");
 
@@ -159,22 +182,39 @@ int main(int argc, char** argv)
             total_lines += nds->RunFrame();
         }
 
+        // Chequear comandos del menu cada 30 frames (~0.5s a 60fps)
+        static int cmd_counter = 0;
+        if (++cmd_counter >= 30) {
+            cmd_counter = 0;
+            CheckMenuCommands(*nds, video, quit);
+            WriteMenuState(*nds);
+        }
+
         void* top_fb = nullptr;
         void* bottom_fb = nullptr;
-        if (nds->GPU.GetFramebuffers(&top_fb, &bottom_fb)) {
+        bool is_ram = nds->GPU.GetFramebuffers(&top_fb, &bottom_fb);
+        if (is_ram) {
+            // Software renderer: punteros a RAM
             if ((dump_count % 300 == 0) && top_fb && bottom_fb) {
                 FILE* f = fopen("/tmp/frame_top.raw", "wb");
                 if (f) { fwrite(top_fb, 1, 256*192*4, f); fclose(f); }
                 f = fopen("/tmp/frame_bot.raw", "wb");
                 if (f) { fwrite(bottom_fb, 1, 256*192*4, f); fclose(f); }
                 printf("[DUMP] frame %d\n", dump_count);
-                unsigned char* t = (unsigned char*)top_fb;
-                printf("[DUMP] top 16 bytes: ");
-                for (int i = 0; i < 16; i++) printf("%02x ", t[i]);
-                printf("\n");
                 dump_count++;
             }
             video.PresentFrame((const uint32_t*)top_fb, (const uint32_t*)bottom_fb);
+        } else {
+            // GLRenderer: top_fb apunta a GLuint
+            if (top_fb) {
+                GLuint tex = *(GLuint*)top_fb;
+                video.PresentGLTexture(tex, 0, 0);  // layer 0 = top
+                video.SwapEGL(0);
+                if (video.IsDualDisplay()) {
+                    video.PresentGLTexture(tex, 1, 1);  // layer 1 = bottom
+                    video.SwapEGL(1);
+                }
+            }
         }
 
         frame_count++;

@@ -105,6 +105,20 @@ if (ENABLE_OGLRENDERER)
         GPU3D_TexcacheOpenGL.h
         OpenGLSupport.cpp)
 
+    # Cargador de funciones GL: glad-gles para GLES, glad desktop por defecto
+    if (MELONDS_GLES)
+        target_sources(core PRIVATE
+            frontend/glad-gles/glad.c)
+        target_compile_definitions(core PUBLIC MELONDS_GLES=1)
+        target_compile_definitions(core PUBLIC "MELONDS_GL_HEADER=\"frontend/glad-gles/glad.h\"")
+        target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        target_sources(core PRIVATE
+            frontend/glad/glad.c)
+        target_compile_definitions(core PUBLIC "MELONDS_GL_HEADER=\"frontend/glad/glad.h\"")
+        target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+
     target_compile_definitions(core PUBLIC OGLRENDERER_ENABLED)
 endif()
 
