@@ -110,3 +110,9 @@ add_subdirectory(src)
 if (BUILD_QT_SDL)
     add_subdirectory(src/frontend/qt_sdl)
 endif()
+
+option(BUILD_SDL_MIN "Build SDL2 minimal frontend (RG DS Plus)" ON)
+
+if (BUILD_SDL_MIN)
+    add_subdirectory(src/frontend/sdl_min)
+endif()
