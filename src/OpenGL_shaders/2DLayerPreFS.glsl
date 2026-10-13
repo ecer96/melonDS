@@ -1,4 +1,12 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
+precision highp usampler2D;
+precision highp usampler2DArray;
+precision highp isampler2D;
+precision highp isampler2DArray;
 
 uniform usampler2D VRAMTex;
 uniform sampler2D PalTex;
@@ -55,7 +63,7 @@ vec4 GetBGLayerPixel(int layer, ivec2 coord)
 
     if (uBGConfig[layer].Type == 0)
     {
-        // text - 16-color tiles
+        // text - 16.0-color tiles
 
         int mapoffset = uBGConfig[layer].MapOffset +
             (((coord.x >> 3) & 0x1F) << 1) +
@@ -102,11 +110,11 @@ vec4 GetBGLayerPixel(int layer, ivec2 coord)
         col += ((mapval >> 12) << 4);
 
         ret = GetBGPalEntry(layer, 0, col);
-        ret.a = ((col & 0xF) == 0) ? 0 : 1;
+        ret.a = ((col & 0xF) == 0) ? 0.0 : 1.0;
     }
     else if (uBGConfig[layer].Type == 1)
     {
-        // text - 256-color tiles
+        // text - 256.0-color tiles
 
         int mapoffset = uBGConfig[layer].MapOffset +
             (((coord.x >> 3) & 0x1F) << 1) +
@@ -149,11 +157,11 @@ vec4 GetBGLayerPixel(int layer, ivec2 coord)
         int pal = (uBGConfig[layer].PalOffset != 0) ? (mapval >> 12) : 0;
 
         ret = GetBGPalEntry(layer, pal, col);
-        ret.a = (col == 0) ? 0 : 1;
+        ret.a = (col == 0) ? 0.0 : 1.0;
     }
     else if (uBGConfig[layer].Type == 2)
     {
-        // affine - 256 color tiles
+        // affine - 256.0 color tiles
 
         int mapoffset = uBGConfig[layer].MapOffset +
             (coord.x >> 3) +
@@ -168,11 +176,11 @@ vec4 GetBGLayerPixel(int layer, ivec2 coord)
         int col = VRAMRead8(tileoffset);
 
         ret = GetBGPalEntry(layer, 0, col);
-        ret.a = (col == 0) ? 0 : 1;
+        ret.a = (col == 0) ? 0.0 : 1.0;
     }
     else if (uBGConfig[layer].Type == 3)
     {
-        // extended - 256 color tiles
+        // extended - 256.0 color tiles
 
         int mapoffset = uBGConfig[layer].MapOffset +
             (((coord.x >> 3) +
@@ -195,11 +203,11 @@ vec4 GetBGLayerPixel(int layer, ivec2 coord)
         int pal = (uBGConfig[layer].PalOffset != 0) ? (mapval >> 12) : 0;
 
         ret = GetBGPalEntry(layer, pal, col);
-        ret.a = (col == 0) ? 0 : 1;
+        ret.a = (col == 0) ? 0.0 : 1.0;
     }
     else if (uBGConfig[layer].Type == 4)
     {
-        // extended - 256 color bitmap
+        // extended - 256.0 color bitmap
 
         int mapoffset = uBGConfig[layer].MapOffset +
             coord.x +
@@ -208,7 +216,7 @@ vec4 GetBGLayerPixel(int layer, ivec2 coord)
         int col = VRAMRead8(mapoffset);
 
         ret = GetBGPalEntry(layer, 0, col);
-        ret.a = (col == 0) ? 0 : 1;
+        ret.a = (col == 0) ? 0.0 : 1.0;
     }
     else if (uBGConfig[layer].Type == 5)
     {
@@ -220,9 +228,9 @@ vec4 GetBGLayerPixel(int layer, ivec2 coord)
 
         int col = VRAMRead16(mapoffset);
 
-        ret.r = float((col << 1) & 0x3E) / 63;
-        ret.g = float((col >> 4) & 0x3E) / 63;
-        ret.b = float((col >> 9) & 0x3E) / 63;
+        ret.r = float((col << 1) & 0x3E) / 63.0;
+        ret.g = float((col >> 4) & 0x3E) / 63.0;
+        ret.b = float((col >> 9) & 0x3E) / 63.0;
         ret.a = float(col >> 15);
     }
 

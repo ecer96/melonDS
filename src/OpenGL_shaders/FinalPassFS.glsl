@@ -1,4 +1,8 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
 
 uniform sampler2D MainInputTexA;
 uniform sampler2D MainInputTexB;
@@ -20,8 +24,8 @@ layout(std140) uniform ubFinalPassConfig
 
 smooth in vec3 fTexcoord;
 
-out vec4 oTopColor;
-out vec4 oBottomColor;
+layout(location = 0) out vec4 oTopColor;
+layout(location = 1) out vec4 oBottomColor;
 
 ivec3 MasterBrightness(ivec3 color, int brightmode, int evy)
 {
@@ -41,15 +45,15 @@ ivec3 MasterBrightness(ivec3 color, int brightmode, int evy)
 
 void main()
 {
-    ivec4 col_main = ivec4(texture(MainInputTexA, fTexcoord.xy, 0) * 255.0) >> 2;
-    ivec4 col_sub = ivec4(texture(MainInputTexB, fTexcoord.xy, 0) * 255.0) >> 2;
+    ivec4 col_main = ivec4(texture(MainInputTexA, fTexcoord.xy, 0.0) * 255.0) >> 2;
+    ivec4 col_sub = ivec4(texture(MainInputTexB, fTexcoord.xy, 0.0) * 255.0) >> 2;
 
     ivec3 output_main, output_sub;
 
     if (uDispModeA == 0)
     {
         // screen disabled (white)
-        output_main = ivec3(63, 63, 63);
+        output_main = ivec3(63, 63.0, 63.0);
     }
     else if (uDispModeA == 1)
     {
@@ -59,13 +63,13 @@ void main()
     else
     {
         // VRAM display / mainmem FIFO
-        output_main = ivec3(texture(AuxInputTex, vec3(fTexcoord.xz, uAuxLayer)).rgb * uAuxColorFactor);
+        output_main = ivec3(texture(AuxInputTex, vec3(fTexcoord.xz, float(uAuxLayer))).rgb * uAuxColorFactor);
     }
 
     if (uDispModeB == 0)
     {
         // screen disabled (white)
-        output_sub = ivec3(63, 63, 63);
+        output_sub = ivec3(63, 63.0, 63.0);
     }
     else
     {
@@ -81,7 +85,7 @@ void main()
     output_main = (output_main << 2) | (output_main >> 6);
     output_sub = (output_sub << 2) | (output_sub >> 6);
 
-    int line = int(fTexcoord.y * 192);
+    int line = int(fTexcoord.y * 192.0);
     bool swapbit = uScreenSwap[line>>2][line&0x3];
 
     if (!swapbit)

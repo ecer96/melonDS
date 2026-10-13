@@ -1,4 +1,8 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
 
 struct sOAM
 {
@@ -34,19 +38,19 @@ smooth out vec2 fTexcoord;
 void main()
 {
     vec2 sprsize = vec2(uOAM[vSpriteIndex].BoundSize);
-    vec2 fbsize = vec2(256, 192);
+    vec2 fbsize = vec2(256.0, 192.0);
 
     int totalprio = (uOAM[vSpriteIndex].BGPrio * 128) + vSpriteIndex;
     float z = float(totalprio) / 512.0;
-    gl_Position = vec4(((vec2(vPosition) * 2) / fbsize) - 1, z, 1);
-    fPosition = vPosition;
+    gl_Position = vec4(((vec2(vPosition) * 2.0) / fbsize) - 1.0, z, 1.0);
+    fPosition = vec2(vPosition);
     fSpriteIndex = vSpriteIndex;
 
     if (uOAM[vSpriteIndex].Rotscale == -1)
     {
         vec2 tmp = vec2(vTexcoord) * sprsize;
-        fTexcoord = mix(tmp, (sprsize - tmp), uOAM[vSpriteIndex].Flip);
+        fTexcoord = mix(tmp, (sprsize - tmp), vec2(uOAM[vSpriteIndex].Flip));
     }
     else
-        fTexcoord = (vec2(vTexcoord) * sprsize) - (sprsize / 2);
+        fTexcoord = (vec2(vTexcoord) * sprsize) - (sprsize / 2.0);
 }

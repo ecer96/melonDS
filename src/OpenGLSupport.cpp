@@ -341,10 +341,16 @@ bool CompileVertexFragmentProgram(GLuint& result,
     {
         glBindAttribLocation(result, target.Location, target.Name);
     }
+    // En GLES, el binding de fragment outputs se hace con layout(location=N)
+    // en el shader. glBindFragDataLocation no existe en GLES.
+#ifdef MELONDS_GLES
+    (void)fragmentOutAttrs;
+#else
     for (const AttributeTarget& target : fragmentOutAttrs)
     {
         glBindFragDataLocation(result, target.Location, target.Name);
     }
+#endif
 
     linkingSucess = LinkProgram(result, shaders, 2);
 

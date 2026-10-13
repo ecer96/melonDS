@@ -1,11 +1,15 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
 
 uniform uvec4 uColor;
 uniform uint uOpaquePolyID;
 uniform uint uFogFlag;
 
-out vec4 oColor;
-out vec4 oAttr;
+layout(location = 0) out vec4 oColor;
+layout(location = 1) out vec4 oAttr;
 
 void main()
 {

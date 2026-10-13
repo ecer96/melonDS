@@ -119,21 +119,27 @@ int main(int argc, char** argv)
     bool use_gl = video.InitEGL();
     if (use_gl) {
         Platform::Log(Platform::LogLevel::Info, "Usando GLRenderer (compute)");
+        Platform::Log(Platform::LogLevel::Info, "Creando GLRenderer...");
         auto glr = std::make_unique<melonDS::GLRenderer>(*nds, true);
+        Platform::Log(Platform::LogLevel::Info, "GLRenderer creado, llamando SetRenderer...");
         nds->SetRenderer(std::move(glr));
+        Platform::Log(Platform::LogLevel::Info, "SetRenderer retorno");
+        Platform::Log(Platform::LogLevel::Info, "SetRenderer OK");
         melonDS::RendererSettings settings = {};
         settings.ScaleFactor = 2;
         settings.Threaded = false;
         settings.HiresCoordinates = true;
         settings.BetterPolygons = false;
         nds->GetRenderer().SetRenderSettings(settings);
+        Platform::Log(Platform::LogLevel::Info, "SetRenderSettings OK");
     } else {
         Platform::Log(Platform::LogLevel::Warn, "EGL fallo, usando SoftRenderer");
         nds->SetRenderer(std::make_unique<melonDS::SoftRenderer>(*nds));
     }
 
-    // Reset despues de setear el renderer (necesario para GLRenderer)
-    nds->Reset();
+    // NOTA: NO hacer un segundo Reset aqui. SetupDirectBoot ya configuro
+    // el estado de las CPUs. Un Reset() adicional borra el direct boot
+    // y deja las CPUs atascadas en el BIOS (PC9=0xFFFF0104, IME=0).
 
     Input input;
     if (!input.Init()) {
@@ -208,6 +214,11 @@ int main(int argc, char** argv)
             // GLRenderer: top_fb apunta a GLuint
             if (top_fb) {
                 GLuint tex = *(GLuint*)top_fb;
+                static int logcount = 0;
+                if (logcount < 5) {
+                    Platform::Log(Platform::LogLevel::Info, "[PRESENT] tex_id=%u layer=0", tex);
+                    logcount++;
+                }
                 video.PresentGLTexture(tex, 0, 0);  // layer 0 = top
                 video.SwapEGL(0);
                 if (video.IsDualDisplay()) {

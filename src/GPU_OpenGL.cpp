@@ -32,15 +32,35 @@ using Platform::LogLevel;
 #include "OpenGL_shaders/CaptureDownscaleVS.h"
 #include "OpenGL_shaders/CaptureDownscaleFS.h"
 
+#include <cstdint>
+// GLES: el DS guarda A1 B5 G5 R5 (bit0=R). GLES quiere R5 G5 B5 A1 (bit0=A).
+static uint16_t AuxConv0[256*256];
+static uint16_t AuxConv1[256*192];
+static inline void Conv1555(const uint16_t* src, uint16_t* dst, int n)
+{
+    for (int i = 0; i < n; i++)
+    {
+        uint16_t c = src[i];
+        uint16_t r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31, a = c >> 15;
+        dst[i] = (uint16_t)((r << 11) | (g << 6) | (b << 1) | a);
+    }
+}
+
 
 GLRenderer::GLRenderer(melonDS::NDS& nds, bool compute)
     : Renderer(nds.GPU)
 {
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Constructor: inicio");
+
     AuxInputBuffer[0] = new u16[256 * 256];
     AuxInputBuffer[1] = new u16[256 * 192];
 
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Constructor: AuxInputBuffer OK");
+
     Rend2D_A = std::make_unique<GLRenderer2D>(GPU.GPU2D_A, *this);
     Rend2D_B = std::make_unique<GLRenderer2D>(GPU.GPU2D_B, *this);
+
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Constructor: Rend2D OK");
 
     // TODO, eventually: figure out a nicer way to support different 3D renderers?
     IsCompute = compute;
@@ -60,7 +80,9 @@ GLRenderer::GLRenderer(melonDS::NDS& nds, bool compute)
 
 bool GLRenderer::Init()
 {
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Init() INICIO");
     assert(glEnable != nullptr);
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] assert OK");
 
     GLint uniloc;
 
@@ -86,6 +108,8 @@ bool GLRenderer::Init()
                                               {{"vPosition", 0}},
                                               {{"oColor", 0}}))
         return false;
+
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Shaders compilados OK");
 
     // vertex buffers
 
@@ -129,6 +153,8 @@ bool GLRenderer::Init()
 
     glGenFramebuffers(2, &FPOutputFB[0]);
 
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] VBOs/VAOs OK");
+
     // capture vertex data: 2x position, 2x texcoord
     glGenBuffers(1, &CaptureVtxBuffer);
     glBindBuffer(GL_ARRAY_BUFFER, CaptureVtxBuffer);
@@ -146,7 +172,7 @@ bool GLRenderer::Init()
     glGenTextures(1, &AuxInputTex);
     glBindTexture(GL_TEXTURE_2D_ARRAY, AuxInputTex);
     glTexParams(GL_TEXTURE_2D_ARRAY, GL_REPEAT);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB5_A1, 256, 256, 2, 0, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, nullptr);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB5_A1, 256, 256, 2, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, nullptr);
 
     glGenTextures(1, &CaptureVRAMTex);
     glBindTexture(GL_TEXTURE_2D_ARRAY, CaptureVRAMTex);
@@ -173,13 +199,15 @@ bool GLRenderer::Init()
     glGenTextures(1, &CaptureSyncTex);
     glBindTexture(GL_TEXTURE_2D, CaptureSyncTex);
     glTexParams(GL_TEXTURE_2D, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, 256, 256, 0, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, 256, 256, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, nullptr);
 
     glGenFramebuffers(1, &CaptureSyncFB);
     glBindFramebuffer(GL_FRAMEBUFFER, CaptureSyncFB);
     glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, CaptureSyncTex, 0);
     glDrawBuffer(GL_COLOR_ATTACHMENT0);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Texturas/FBOs OK");
 
     // UBOs
 
@@ -194,6 +222,8 @@ bool GLRenderer::Init()
     static_assert((sizeof(sCaptureConfig) & 15) == 0);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(sCaptureConfig), nullptr, GL_STREAM_DRAW);
     glBindBufferBase(GL_UNIFORM_BUFFER, 31, CaptureConfigUBO);
+
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] UBOs OK");
 
     // shader config
 
@@ -234,11 +264,17 @@ bool GLRenderer::Init()
     auto rend2DB = dynamic_cast<GLRenderer2D*>(Rend2D_B.get());
     if (!rend2DB->InitShaders(*rend2DA)) return false;
 
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] InitShaders 2D OK");
+
     if (!Rend2D_A->Init()) return false;
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Rend2D_A OK");
     if (!Rend2D_B->Init()) return false;
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Rend2D_B OK");
     if (!Rend3D->Init()) return false;
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Rend3D OK");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    Platform::Log(Platform::LogLevel::Info, "[GLRenderer] Init OK");
     return true;
 }
 
@@ -570,13 +606,13 @@ void GLRenderer::RenderScreen(int ystart, int yend)
             glBindTexture(GL_TEXTURE_2D_ARRAY, AuxInputTex);
             if ((AuxUsageMask & (1<<0)) && (vramcap == -1))
             {
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 256, 256, 1, GL_RGBA,
-                                GL_UNSIGNED_SHORT_1_5_5_5_REV, AuxInputBuffer[0]);
+                Conv1555((const uint16_t*)AuxInputBuffer[0], AuxConv0, 256*256);
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 256, 256, 1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, AuxConv0);
             }
             if (AuxUsageMask & (1<<1))
             {
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, 256, 192, 1, GL_RGBA,
-                                GL_UNSIGNED_SHORT_1_5_5_5_REV, AuxInputBuffer[1]);
+                Conv1555((const uint16_t*)AuxInputBuffer[1], AuxConv1, 256*192);
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, 256, 192, 1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, AuxConv1);
             }
         }
 

@@ -1,4 +1,8 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
 
 uniform sampler2D InputTexA;
 uniform sampler2DArray InputTexB;
@@ -31,7 +35,7 @@ float GetSrcAPos(float line)
 void main()
 {
     vec2 coordA = fTexcoord.xy;
-    vec3 coordB = vec3(fTexcoord.xw, uSrcBLayer);
+    vec3 coordB = vec3(fTexcoord.xw, float(uSrcBLayer));
     ivec4 cap_out;
 
     // apply scroll for 3D layer, if we're capturing that

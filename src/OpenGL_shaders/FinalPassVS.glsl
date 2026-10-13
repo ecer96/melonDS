@@ -1,4 +1,8 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
 
 layout(std140) uniform ubFinalPassConfig
 {
@@ -20,6 +24,6 @@ smooth out vec3 fTexcoord;
 
 void main()
 {
-    gl_Position = vec4(vPosition, 0, 1);
-    fTexcoord = (vPosition.xyy + 1) * vec3(0.5, 0.5, 0.375);
+    gl_Position = vec4(vPosition, 0.0, 1.0);
+    fTexcoord = (vPosition.xyy + 1.0) * vec3(0.5, 0.5, 0.375);
 }

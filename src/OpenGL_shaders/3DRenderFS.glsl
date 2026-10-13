@@ -1,4 +1,12 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
+precision highp usampler2D;
+precision highp usampler2DArray;
+precision highp isampler2D;
+precision highp isampler2DArray;
 
 uniform usampler2DArray CurTexture;
 uniform sampler2DArray Capture128Texture;
@@ -26,8 +34,8 @@ flat in ivec3 fPolygonAttr;
 smooth in float fZ;
 #endif
 
-out vec4 oColor;
-out vec4 oAttr;
+layout(location = 0) out vec4 oColor;
+layout(location = 1) out vec4 oAttr;
 
 vec4 FinalColor()
 {
@@ -40,7 +48,7 @@ vec4 FinalColor()
         if ((uDispCnt & (1<<1)) == 0)
         {
             // toon
-            vec3 tooncolor = uToonColors[int(vcol.r * 31)].rgb;
+            vec3 tooncolor = uToonColors[int(vcol.r * 31.0)].rgb;
             vcol.rgb = tooncolor;
         }
         else
@@ -57,10 +65,10 @@ vec4 FinalColor()
     }
     else
     {
-        vec3 texcoord = vec3(fTexcoord, fPolygonAttr.y);
+        vec3 texcoord = vec3(fTexcoord, float(fPolygonAttr.y));
         vec4 tcol;
         if (fPolygonAttr.z == 0)
-            tcol = vec4(texture(CurTexture, texcoord)) / vec4(63,63,63,31);
+            tcol = vec4(texture(CurTexture, texcoord)) / vec4(63.0,63.0,63.0,31.0);
         else if (fPolygonAttr.z == 1)
             tcol = texture(Capture128Texture, texcoord);
         else
@@ -83,7 +91,7 @@ vec4 FinalColor()
     {
         if ((uDispCnt & (1<<1)) != 0)
         {
-            vec3 tooncolor = uToonColors[int(vcol.r * 31)].rgb;
+            vec3 tooncolor = uToonColors[int(vcol.r * 31.0)].rgb;
             col.rgb = min(col.rgb + tooncolor, 1.0);
         }
     }
@@ -95,7 +103,7 @@ void main()
 {
     if (uRenderMode == 2)
     {
-        oColor = vec4(0,0,0,1);
+        oColor = vec4(0.0,0.0,0.0,1.0);
     }
     else
     {
@@ -103,21 +111,21 @@ void main()
         if (uRenderMode == 0)
         {
             // opaque pixels
-            if (col.a < 30.5/31) discard;
+            if (col.a < 30.5/31.0) discard;
 
             oAttr.r = float((fPolygonAttr.x >> 24) & 0x3F) / 63.0;
-            oAttr.g = 0;
+            oAttr.g = 0.0;
             oAttr.b = float((fPolygonAttr.x >> 15) & 0x1);
-            oAttr.a = 1;
+            oAttr.a = 1.0;
         }
         else
         {
             // translucent pixels
-            if (col.a < 0.5/31) discard;
-            if (col.a >= 30.5/31) discard;
+            if (col.a < 0.5/31.0) discard;
+            if (col.a >= 30.5/31.0) discard;
 
-            oAttr.b = 0;
-            oAttr.a = 1;
+            oAttr.b = 0.0;
+            oAttr.a = 1.0;
         }
 
         oColor = col;

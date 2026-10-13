@@ -1,6 +1,6 @@
 /*
     video.cpp - Renderizado de las dos pantallas del DS
-    Modo dual: SDL_Renderer (software) o EGL+GLES (hardware)
+    Modo dual: SDL_GL + GLES (con GLRenderer de melonDS)
     Parte del fork RG DS Plus de melonDS.
     Licencia: GPLv3
 */
@@ -12,8 +12,6 @@
 #include <cstring>
 
 #ifdef MELONDS_GLES
-#include <EGL/egl.h>
-#include <GLES3/gl3.h>
 #include "frontend/glad-gles/glad.h"
 #endif
 
@@ -53,14 +51,25 @@ bool Video::Init(int scale)
             i, bounds.w, bounds.h, bounds.x, bounds.y);
     }
 
+    // Configurar GLES 3.0/3.2 ANTES de crear las ventanas
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_EGL, 1);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+
     if (num_displays_ >= 2) {
         dual_display_ = true;
-        if (!InitDisplay(0, &win_top_, &ren_top_, &tex_top_, scale,
-                         "melonDS DS Top Screen")) {
+        if (!InitDisplay(0, &win_top_, "melonDS DS Top Screen")) {
             return false;
         }
-        if (!InitDisplay(1, &win_bot_, &ren_bot_, &tex_bot_, scale,
-                         "melonDS DS Bottom Screen")) {
+        if (!InitDisplay(1, &win_bot_, "melonDS DS Bottom Screen")) {
             return false;
         }
         Platform::Log(Platform::LogLevel::Info,
@@ -80,31 +89,12 @@ bool Video::Init(int scale)
             return false;
         }
 
-        ren_top_ = SDL_CreateRenderer(win_top_, -1,
-            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-        if (!ren_top_) {
-            Platform::Log(Platform::LogLevel::Error,
-                "SDL_CreateRenderer fallo: %s", SDL_GetError());
-            return false;
-        }
-
-        tex_top_ = SDL_CreateTexture(ren_top_,
-            SDL_PIXELFORMAT_ARGB8888,
-            SDL_TEXTUREACCESS_STREAMING,
-            DS_WIDTH, DS_HEIGHT * 2);
-        if (!tex_top_) {
-            Platform::Log(Platform::LogLevel::Error,
-                "SDL_CreateTexture fallo: %s", SDL_GetError());
-            return false;
-        }
-
         Platform::Log(Platform::LogLevel::Info,
             "Modo SINGLE: una ventana %dx%d con dos pantallas apiladas",
             win_w, win_h);
     }
 
-    // Forzar mostrar las ventanas antes de crear el contexto EGL
-    // (necesario en Wayland: el wl_surface debe estar mapeado)
+    // Mostrar las ventanas antes de crear el contexto GL
     if (win_top_) SDL_ShowWindow(win_top_);
     if (win_bot_) SDL_ShowWindow(win_bot_);
     SDL_PumpEvents();
@@ -113,10 +103,8 @@ bool Video::Init(int scale)
     return true;
 }
 
-bool Video::InitDisplay(int index, SDL_Window** win, SDL_Renderer** ren,
-                        SDL_Texture** tex, int scale, const char* title)
+bool Video::InitDisplay(int index, SDL_Window** win, const char* title)
 {
-    (void)scale;
     SDL_Rect bounds;
     if (SDL_GetDisplayBounds(index, &bounds) != 0) {
         Platform::Log(Platform::LogLevel::Error,
@@ -133,33 +121,6 @@ bool Video::InitDisplay(int index, SDL_Window** win, SDL_Renderer** ren,
         return false;
     }
 
-    *ren = SDL_CreateRenderer(*win, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!*ren) {
-        Platform::Log(Platform::LogLevel::Warn,
-            "SDL_CreateRenderer acelerado fallo, probando software: %s",
-            SDL_GetError());
-        *ren = SDL_CreateRenderer(*win, -1, SDL_RENDERER_SOFTWARE);
-        if (!*ren) {
-            Platform::Log(Platform::LogLevel::Error,
-                "SDL_CreateRenderer software fallo: %s", SDL_GetError());
-            return false;
-        }
-    }
-
-    *tex = SDL_CreateTexture(*ren,
-        SDL_PIXELFORMAT_ARGB8888,
-        SDL_TEXTUREACCESS_STREAMING,
-        DS_WIDTH, DS_HEIGHT);
-    if (!*tex) {
-        Platform::Log(Platform::LogLevel::Error,
-            "SDL_CreateTexture fallo: %s", SDL_GetError());
-        return false;
-    }
-
-    SDL_SetTextureScaleMode(*tex, SDL_ScaleModeNearest);
-    SDL_SetTextureBlendMode(*tex, SDL_BLENDMODE_NONE);
-
     Platform::Log(Platform::LogLevel::Info,
         "Display %d listo: %dx%d", index, bounds.w, bounds.h);
 
@@ -167,15 +128,15 @@ bool Video::InitDisplay(int index, SDL_Window** win, SDL_Renderer** ren,
 }
 
 // ============================================================
-// EGL + GLES
+// SDL_GL + GLES
 // ============================================================
 
 #ifdef MELONDS_GLES
 
 static const char* g_vertex_shader =
-    "#version 310 es\n"
-    "in vec2 vPosition;\n"
-    "in vec2 vTexcoord;\n"
+    "#version 300 es\n"
+    "layout(location = 0) in vec2 vPosition;\n"
+    "layout(location = 1) in vec2 vTexcoord;\n"
     "out vec2 texcoord;\n"
     "void main() {\n"
     "    gl_Position = vec4(vPosition, 0.0, 1.0);\n"
@@ -183,8 +144,9 @@ static const char* g_vertex_shader =
     "}\n";
 
 static const char* g_fragment_shader =
-    "#version 310 es\n"
+    "#version 300 es\n"
     "precision highp float;\n"
+    "precision highp sampler2DArray;\n"
     "uniform sampler2DArray uTex;\n"
     "uniform float uLayer;\n"
     "in vec2 texcoord;\n"
@@ -213,9 +175,12 @@ static GLuint compile_shader(GLenum type, const char* src) {
 bool Video::InitGLProgram()
 {
     GLuint vs = compile_shader(GL_VERTEX_SHADER, g_vertex_shader);
-    if (!vs) return false;
+    if (!vs) { Platform::Log(Platform::LogLevel::Error, "[InitGLProgram] VS fallo"); return false; }
+    Platform::Log(Platform::LogLevel::Info, "[InitGLProgram] VS compilado OK");
+
     GLuint fs = compile_shader(GL_FRAGMENT_SHADER, g_fragment_shader);
-    if (!fs) { glDeleteShader(vs); return false; }
+    if (!fs) { glDeleteShader(vs); Platform::Log(Platform::LogLevel::Error, "[InitGLProgram] FS fallo"); return false; }
+    Platform::Log(Platform::LogLevel::Info, "[InitGLProgram] FS compilado OK");
 
     gl_program_ = glCreateProgram();
     glAttachShader(gl_program_, vs);
@@ -233,7 +198,7 @@ bool Video::InitGLProgram()
     glDeleteShader(vs);
     glDeleteShader(fs);
 
-    // VAO + VBO con quad fullscreen
+    // VAO + VBO con quad fullscreen + coords de textura
     static const float verts[] = {
         // x, y, u, v
         -1, -1, 0, 1,
@@ -247,16 +212,11 @@ bool Video::InitGLProgram()
     glBindBuffer(GL_ARRAY_BUFFER, gl_vbo_);
     glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
 
-    GLint pos = glGetAttribLocation(gl_program_, "vPosition");
-    GLint tex = glGetAttribLocation(gl_program_, "vTexcoord");
-    if (pos >= 0) {
-        glEnableVertexAttribArray(pos);
-        glVertexAttribPointer(pos, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
-    }
-    if (tex >= 0) {
-        glEnableVertexAttribArray(tex);
-        glVertexAttribPointer(tex, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
-    }
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
+
     glBindVertexArray(0);
 
     Platform::Log(Platform::LogLevel::Info, "InitGLProgram: OK");
@@ -270,92 +230,29 @@ bool Video::InitEGL()
         return false;
     }
 
-    EGLDisplay dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (dpy == EGL_NO_DISPLAY) {
-        Platform::Log(Platform::LogLevel::Error, "eglGetDisplay fallo");
+    // Crear contexto GLES con SDL_GL
+    gl_ctx_ = SDL_GL_CreateContext(win_top_);
+    if (!gl_ctx_) {
+        Platform::Log(Platform::LogLevel::Error,
+            "SDL_GL_CreateContext fallo: %s", SDL_GetError());
         return false;
     }
-    egl_display_ = dpy;
+    Platform::Log(Platform::LogLevel::Info, "SDL_GL_CreateContext: OK");
 
-    EGLint major, minor;
-    if (!eglInitialize(dpy, &major, &minor)) {
-        Platform::Log(Platform::LogLevel::Error, "eglInitialize fallo");
+    if (SDL_GL_MakeCurrent(win_top_, gl_ctx_) != 0) {
+        Platform::Log(Platform::LogLevel::Error,
+            "SDL_GL_MakeCurrent fallo: %s", SDL_GetError());
         return false;
     }
-    Platform::Log(Platform::LogLevel::Info,
-        "EGL %d.%d inicializado", major, minor);
+    Platform::Log(Platform::LogLevel::Info, "SDL_GL_MakeCurrent: OK");
 
-    const EGLint cfg_attribs[] = {
-        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-        EGL_RED_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8,
-        EGL_ALPHA_SIZE, 8,
-        EGL_DEPTH_SIZE, 0,
-        EGL_STENCIL_SIZE, 0,
-        EGL_NONE
-    };
-    EGLConfig cfg;
-    EGLint num_cfg = 0;
-    if (!eglChooseConfig(dpy, cfg_attribs, &cfg, 1, &num_cfg) || num_cfg == 0) {
-        Platform::Log(Platform::LogLevel::Error, "eglChooseConfig fallo");
+    SDL_GL_SetSwapInterval(0);  // sin vsync (pacing manual)
+
+    // Cargar glad con SDL_GL_GetProcAddress
+    if (!gladLoadGLES2Loader((GLADloadproc)SDL_GL_GetProcAddress)) {
+        Platform::Log(Platform::LogLevel::Error, "gladLoadGLES2Loader fallo");
         return false;
     }
-    Platform::Log(Platform::LogLevel::Info, "eglChooseConfig: OK");
-
-    const EGLint ctx_attribs[] = {
-        EGL_CONTEXT_MAJOR_VERSION, 3,
-        EGL_CONTEXT_MINOR_VERSION, 2,
-        EGL_NONE
-    };
-
-    // Contexto y surface para pantalla superior
-    EGLContext ctx_top = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attribs);
-    if (ctx_top == EGL_NO_CONTEXT) {
-        Platform::Log(Platform::LogLevel::Error, "eglCreateContext (top) fallo");
-        return false;
-    }
-    Platform::Log(Platform::LogLevel::Info, "eglCreateContext (top): OK");
-    EGLNativeWindowType nwt_top = (EGLNativeWindowType)win_top_;
-    EGLSurface surf_top = eglCreateWindowSurface(dpy, cfg, nwt_top, nullptr);
-    if (surf_top == EGL_NO_SURFACE) {
-        Platform::Log(Platform::LogLevel::Error, "eglCreateWindowSurface (top) fallo");
-        return false;
-    }
-    Platform::Log(Platform::LogLevel::Info, "eglCreateWindowSurface (top): OK");
-
-    egl_context_top_ = ctx_top;
-    egl_surface_top_ = surf_top;
-
-    // Contexto y surface para pantalla inferior (si dual)
-    if (dual_display_ && win_bot_) {
-        EGLContext ctx_bot = eglCreateContext(dpy, cfg, ctx_top, ctx_attribs);
-        EGLNativeWindowType nwt_bot = (EGLNativeWindowType)win_bot_;
-        EGLSurface surf_bot = eglCreateWindowSurface(dpy, cfg, nwt_bot, nullptr);
-        if (ctx_bot == EGL_NO_CONTEXT || surf_bot == EGL_NO_SURFACE) {
-            Platform::Log(Platform::LogLevel::Warn,
-                "eglCreateContext/Surface (bottom) fallo, modo single");
-            egl_context_bot_ = nullptr;
-            egl_surface_bot_ = nullptr;
-        } else {
-            egl_context_bot_ = ctx_bot;
-            egl_surface_bot_ = surf_bot;
-        }
-    }
-
-    // Hacer current el contexto superior y cargar glad
-    if (!eglMakeCurrent(dpy, surf_top, surf_top, ctx_top)) {
-        Platform::Log(Platform::LogLevel::Error, "eglMakeCurrent (top) fallo");
-        return false;
-    }
-    Platform::Log(Platform::LogLevel::Info, "eglMakeCurrent: OK");
-
-    if (!gladLoadGLES2Loader((GLADloadproc)eglGetProcAddress)) {
-        Platform::Log(Platform::LogLevel::Error, "gladLoadGLES2 fallo");
-        return false;
-    }
-    Platform::Log(Platform::LogLevel::Info, "gladLoadGLES2Loader: OK");
     Platform::Log(Platform::LogLevel::Info,
         "GL_VERSION: %s", (const char*)glGetString(GL_VERSION));
     Platform::Log(Platform::LogLevel::Info,
@@ -366,38 +263,60 @@ bool Video::InitEGL()
         return false;
     }
 
-    egl_initialized_ = true;
+    gl_mode_ = true;
     Platform::Log(Platform::LogLevel::Info, "InitEGL: OK");
     return true;
 }
 
 void Video::PresentGLTexture(unsigned int tex_id, int layer, int screen)
 {
-    if (!egl_initialized_) return;
+    if (!gl_mode_) return;
 
-    EGLDisplay dpy = (EGLDisplay)egl_display_;
-    EGLContext ctx = (screen == 0)
-        ? (EGLContext)egl_context_top_
-        : (EGLContext)egl_context_bot_;
-    EGLSurface surf = (screen == 0)
-        ? (EGLSurface)egl_surface_top_
-        : (EGLSurface)egl_surface_bot_;
+    SDL_Window* win = (screen == 0) ? win_top_ : win_bot_;
+    if (!win) return;
 
-    if (ctx == nullptr || surf == nullptr) return;
+    SDL_GL_MakeCurrent(win, gl_ctx_);
 
-    eglMakeCurrent(dpy, surf, surf, ctx);
+    // FIX CRITICO: el GLRenderer deja un FBO bindeado.
+    // Sin esto, el clear y el draw caen en el FBO del renderer, no en la ventana.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // FIX: resetear estado que el GLRenderer puede haber dejado sucio
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     int win_w = 0, win_h = 0;
-    SDL_Window* win = (screen == 0) ? win_top_ : win_bot_;
     SDL_GetWindowSize(win, &win_w, &win_h);
     glViewport(0, 0, win_w, win_h);
 
-    glClearColor(0, 0, 0, 1);
+    static int viewport_log = 0;
+    if (viewport_log < 10) {
+        Platform::Log(Platform::LogLevel::Info, "[PRESENT] screen=%d win=%p win_w=%d win_h=%d", screen, (void*)win, win_w, win_h);
+        viewport_log++;
+    }
+
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);  // NEGRO
     glClear(GL_COLOR_BUFFER_BIT);
 
+    static int presentlogcount = 0;
+    if (presentlogcount < 5) {
+        Platform::Log(Platform::LogLevel::Info, "[PRESENT] screen=%d tex_id=%u win=%p ctx=%p", screen, tex_id, (void*)win, (void*)gl_ctx_);
+        presentlogcount++;
+    }
     glUseProgram(gl_program_);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, tex_id);
+
+    // FIX: texturas sin mipmaps -> forzar NEAREST, sin filtro de mipmap
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
     GLint uloc_tex = glGetUniformLocation(gl_program_, "uTex");
     GLint uloc_layer = glGetUniformLocation(gl_program_, "uLayer");
     if (uloc_tex >= 0) glUniform1i(uloc_tex, 0);
@@ -406,17 +325,24 @@ void Video::PresentGLTexture(unsigned int tex_id, int layer, int screen)
     glBindVertexArray(gl_vao_);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
+
+    {
+        unsigned char px[4];
+        glReadPixels(win_w/2, win_h/2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        static int pxlog = 0;
+        if (pxlog < 5) {
+            Platform::Log(Platform::LogLevel::Info, "px=%u %u %u %u", px[0], px[1], px[2], px[3]);
+            pxlog++;
+        }
+    }
+
+    SDL_GL_SwapWindow(win);
 }
 
 void Video::SwapEGL(int screen)
 {
-    if (!egl_initialized_) return;
-    EGLDisplay dpy = (EGLDisplay)egl_display_;
-    EGLSurface surf = (screen == 0)
-        ? (EGLSurface)egl_surface_top_
-        : (EGLSurface)egl_surface_bot_;
-    if (surf == nullptr) return;
-    eglSwapBuffers(dpy, surf);
+    (void)screen;
+    // No-op: SDL_GL_SwapWindow ya se llama en PresentGLTexture
 }
 
 #else
@@ -428,85 +354,39 @@ void Video::SwapEGL(int) {}
 #endif
 
 // ============================================================
-// SDL_Renderer (fallback para SoftRenderer)
+// PresentFrame (stub: solo se usa con SoftRenderer + SDL_Renderer)
 // ============================================================
 
 void Video::PresentFrame(const uint32_t* top, const uint32_t* bottom)
 {
-    if (!top || !bottom) return;
-
-    if (dual_display_) {
-        RenderScreen(ren_top_, tex_top_, top);
-        RenderScreen(ren_bot_, tex_bot_, bottom);
-    } else {
-        static uint32_t combined[DS_WIDTH * DS_HEIGHT * 2];
-        memcpy(combined, top, DS_WIDTH * DS_HEIGHT * sizeof(uint32_t));
-        memcpy(combined + DS_WIDTH * DS_HEIGHT, bottom,
-               DS_WIDTH * DS_HEIGHT * sizeof(uint32_t));
-
-        SDL_UpdateTexture(tex_top_, nullptr, combined,
-                          DS_WIDTH * sizeof(uint32_t));
-
-        int win_w = 0, win_h = 0;
-        SDL_GetWindowSize(win_top_, &win_w, &win_h);
-        if (win_w <= 0) win_w = 512;
-        if (win_h <= 0) win_h = 768;
-
-        SDL_Rect dst = { 0, 0, win_w, win_h };
-
-        SDL_RenderClear(ren_top_);
-        SDL_RenderCopy(ren_top_, tex_top_, nullptr, &dst);
-        SDL_RenderPresent(ren_top_);
-    }
-}
-
-void Video::RenderScreen(SDL_Renderer* ren, SDL_Texture* tex,
-                         const uint32_t* pixels)
-{
-    SDL_UpdateTexture(tex, nullptr, pixels, DS_WIDTH * sizeof(uint32_t));
-
-    int win_w = 0, win_h = 0;
-    SDL_Window* win = SDL_RenderGetWindow(ren);
-    if (win) SDL_GetWindowSize(win, &win_w, &win_h);
-    if (win_w <= 0) win_w = 640;
-    if (win_h <= 0) win_h = 480;
-
-    SDL_Rect dst = { 0, 0, win_w, win_h };
-
-    SDL_RenderClear(ren);
-    SDL_RenderCopy(ren, tex, nullptr, &dst);
-    SDL_RenderPresent(ren);
+    (void)top;
+    (void)bottom;
+    // No-op: el renderer GL escribe directamente a la textura del SDL_GL
+    // y PresentGLTexture se encarga de presentar.
 }
 
 void Video::SetScaleMode(int mode)
 {
     if (mode == scale_mode_) return;
     scale_mode_ = mode;
-    // Por ahora: no aplicamos cambios al renderer (eso ya lo hace el GLRenderer)
     Platform::Log(Platform::LogLevel::Info,
         "Video: modo de escalado cambiado a %d", mode);
 }
 
 void Video::DeInit()
 {
-    // EGL
-    if (egl_initialized_) {
-        EGLDisplay dpy = (EGLDisplay)egl_display_;
-        eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        if (egl_context_bot_) eglDestroyContext(dpy, (EGLContext)egl_context_bot_);
-        if (egl_context_top_) eglDestroyContext(dpy, (EGLContext)egl_context_top_);
-        if (egl_surface_bot_) eglDestroySurface(dpy, (EGLSurface)egl_surface_bot_);
-        if (egl_surface_top_) eglDestroySurface(dpy, (EGLSurface)egl_surface_top_);
-        eglTerminate(dpy);
-        egl_initialized_ = false;
+    if (gl_ctx_) {
+        SDL_GL_DeleteContext(gl_ctx_);
+        gl_ctx_ = nullptr;
     }
+    if (gl_program_) { glDeleteProgram(gl_program_); gl_program_ = 0; }
+    if (gl_vao_) { glDeleteVertexArrays(1, &gl_vao_); gl_vao_ = 0; }
+    if (gl_vbo_) { glDeleteBuffers(1, &gl_vbo_); gl_vbo_ = 0; }
 
-    if (tex_top_) { SDL_DestroyTexture(tex_top_); tex_top_ = nullptr; }
-    if (tex_bot_) { SDL_DestroyTexture(tex_bot_); tex_bot_ = nullptr; }
-    if (ren_top_) { SDL_DestroyRenderer(ren_top_); ren_top_ = nullptr; }
-    if (ren_bot_) { SDL_DestroyRenderer(ren_bot_); ren_bot_ = nullptr; }
     if (win_top_) { SDL_DestroyWindow(win_top_); win_top_ = nullptr; }
     if (win_bot_) { SDL_DestroyWindow(win_bot_); win_bot_ = nullptr; }
+
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
 }
 
 } // namespace FrontendSDL

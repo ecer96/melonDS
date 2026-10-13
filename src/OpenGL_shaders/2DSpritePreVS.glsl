@@ -1,4 +1,8 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
 
 struct sOAM
 {
@@ -33,10 +37,10 @@ void main()
 {
     ivec2 sprpos = ivec2((vSpriteIndex & 0xF) * 64, (vSpriteIndex >> 4) * 64);
     ivec2 sprsize = uOAM[vSpriteIndex].Size;
-    vec2 vtxpos = vec2(sprpos) + (vPosition * vec2(sprsize));
-    vec2 fbsize = vec2(1024, 512);
+    vec2 vtxpos = vec2(sprpos) + (vec2(vPosition) * vec2(sprsize));
+    vec2 fbsize = vec2(1024.0, 512.0);
 
-    gl_Position = vec4(((vtxpos * 2) / fbsize) - 1, 0, 1);
+    gl_Position = vec4(((vtxpos * 2.0) / fbsize) - 1.0, 0.0, 1.0);
     fSpriteIndex = vSpriteIndex;
-    fTexcoord = vPosition * vec2(sprsize);
+    fTexcoord = vec2(vPosition) * vec2(sprsize);
 }

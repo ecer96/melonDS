@@ -28,38 +28,27 @@ public:
     void SetScaleMode(int mode);
     int  GetScaleMode() const { return scale_mode_; }
 
-    // GL: EGL + GLES
+    // GL: SDL_GL + GLES
     bool InitEGL();
-    bool HasEGL() const { return egl_initialized_; }
+    bool HasEGL() const { return gl_mode_; }
     void PresentGLTexture(unsigned int tex_id, int layer, int screen);
-    void SwapEGL(int screen);
+    void SwapEGL(int screen);  // ahora es no-op (el swap lo hace PresentGLTexture)
 
 private:
     SDL_Window* win_top_ = nullptr;
     SDL_Window* win_bot_ = nullptr;
-    SDL_Renderer* ren_top_ = nullptr;
-    SDL_Renderer* ren_bot_ = nullptr;
-    SDL_Texture* tex_top_ = nullptr;
-    SDL_Texture* tex_bot_ = nullptr;
     int num_displays_ = 0;
     bool dual_display_ = false;
     int scale_mode_ = SCALE_NEAREST;
 
-    // EGL/GLES
-    bool egl_initialized_ = false;
-    void* egl_display_ = nullptr;
-    void* egl_context_top_ = nullptr;
-    void* egl_context_bot_ = nullptr;
-    void* egl_surface_top_ = nullptr;
-    void* egl_surface_bot_ = nullptr;
+    // SDL_GL
+    bool gl_mode_ = false;
+    SDL_GLContext gl_ctx_ = nullptr;
     unsigned int gl_program_ = 0;
     unsigned int gl_vao_ = 0;
     unsigned int gl_vbo_ = 0;
 
-    bool InitDisplay(int index, SDL_Window** win, SDL_Renderer** ren,
-                     SDL_Texture** tex, int scale, const char* title);
-    void RenderScreen(SDL_Renderer* ren, SDL_Texture* tex,
-                      const uint32_t* pixels);
+    bool InitDisplay(int index, SDL_Window** win, const char* title);
     bool InitGLProgram();
 };
 

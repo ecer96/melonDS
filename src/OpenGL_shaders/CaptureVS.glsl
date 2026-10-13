@@ -1,4 +1,8 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
 
 layout(std140) uniform ubCaptureConfig
 {
@@ -20,8 +24,8 @@ smooth out vec4 fTexcoord;
 void main()
 {
     vec2 pos = vec2(vPosition) * uInvCaptureSize.xx;
-    gl_Position = vec4((pos * 2) - 1, 0, 1);
-    fTexcoord.xy = vec2(vTexcoord) / vec2(256,192);
-    fTexcoord.z = vTexcoord.y;
+    gl_Position = vec4((pos * 2.0) - 1.0, 0.0, 1.0);
+    fTexcoord.xy = vec2(vTexcoord) / vec2(256.0, 192.0);
+    fTexcoord.z = float(vTexcoord.y);
     fTexcoord.w = float(vTexcoord.y + uSrcBOffset) / 256.0;
 }

@@ -1,4 +1,8 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
 
 uniform sampler2D SpriteTex;
 uniform sampler2DArray Capture128Tex;
@@ -38,8 +42,8 @@ flat in int fSpriteIndex;
 smooth in vec2 fPosition;
 smooth in vec2 fTexcoord;
 
-out vec4 oColor;
-out vec4 oFlags;
+layout(location = 0) out vec4 oColor;
+layout(location = 1) out vec4 oFlags;
 
 vec4 GetSpritePixel(int sprite, vec2 coord)
 {
@@ -58,11 +62,11 @@ void main()
         int line = int(fPosition.y);
         int mosline = uMosaicLine[line>>2][line&0x3];
 
-        float ymin = 0;
+        float ymin = 0.0;
         if (uOAM[fSpriteIndex].Rotscale != -1)
             ymin = -float(uOAM[fSpriteIndex].Size.y) / 2.0;
 
-        float mosy = coord.y - (line - mosline);
+        float mosy = coord.y - float(line - mosline);
         if (coord.y >= ymin)
             coord.y = max(mosy, ymin);
     }
@@ -73,10 +77,10 @@ void main()
         // fTexcoord is based on the sprite center
 
         vec2 sprsize = vec2(uOAM[fSpriteIndex].Size);
-        vec4 rotscale = vec4(uRotscale[uOAM[fSpriteIndex].Rotscale]) / 256;
+        vec4 rotscale = vec4(uRotscale[uOAM[fSpriteIndex].Rotscale]) / 256.0;
         mat2 rsmatrix = mat2(rotscale.xy, rotscale.zw);
-        coord = (coord * rsmatrix) + (sprsize / 2);
-        if (any(lessThan(coord, vec2(0)))) discard;
+        coord = (coord * rsmatrix) + (sprsize / 2.0);
+        if (any(lessThan(coord, vec2(0.0)))) discard;
         if (any(greaterThanEqual(coord, sprsize))) discard;
     }
 
@@ -85,33 +89,33 @@ void main()
         // set BG priority and mosaic flags for transparent pixels
 
         if (uOAM[fSpriteIndex].Mosaic)
-            flags.g = 1;
+            flags.g = 1.0;
 
-        flags.a = float(uOAM[fSpriteIndex].BGPrio) / 255;
+        flags.a = float(uOAM[fSpriteIndex].BGPrio) / 255.0;
 
-        oColor = vec4(0);
+        oColor = vec4(0.0);
         oFlags = flags;
         return;
     }
 
     if (uOAM[fSpriteIndex].Type == 3)
     {
-        coord += (ivec2(uOAM[fSpriteIndex].TileOffset) >> ivec2(1, 8));
+        coord += vec2(ivec2(uOAM[fSpriteIndex].TileOffset) >> ivec2(1, 8));
         coord *= (1.0/128.0);
-        col = texture(Capture256Tex, vec3(fract(coord), uOAM[fSpriteIndex].TileStride));
+        col = texture(Capture256Tex, vec3(fract(coord), float(uOAM[fSpriteIndex].TileStride)));
     }
     else if (uOAM[fSpriteIndex].Type == 4)
     {
-        coord += (ivec2(uOAM[fSpriteIndex].TileOffset) >> ivec2(1, 9));
+        coord += vec2(ivec2(uOAM[fSpriteIndex].TileOffset) >> ivec2(1, 9));
         coord *= (1.0/256.0);
-        col = texture(Capture256Tex, vec3(fract(coord), uOAM[fSpriteIndex].TileStride));
+        col = texture(Capture256Tex, vec3(fract(coord), float(uOAM[fSpriteIndex].TileStride)));
     }
     else
     {
         col = GetSpritePixel(fSpriteIndex, coord);
     }
 
-    if (col.a == 0) discard;
+    if (col.a == 0.0) discard;
 
     // oFlags:
     // r = sprite blending flag
@@ -123,26 +127,26 @@ void main()
     {
         // OBJ window
         // OBJ mosaic doesn't apply to "OBJ window" sprites
-        flags.b = 1;
+        flags.b = 1.0;
     }
     else
     {
         if (uOAM[fSpriteIndex].OBJMode == 1)
         {
             // semi-transparent sprite
-            flags.r = 1.0 / 255;
+            flags.r = 1.0 / 255.0;
         }
         else if (uOAM[fSpriteIndex].OBJMode == 3)
         {
             // bitmap sprite
-            col.a = float(uOAM[fSpriteIndex].PalOffset) / 31;
-            flags.r = 2.0 / 255;
+            col.a = float(uOAM[fSpriteIndex].PalOffset) / 31.0;
+            flags.r = 2.0 / 255.0;
         }
 
         if (uOAM[fSpriteIndex].Mosaic)
-            flags.g = 1;
+            flags.g = 1.0;
 
-        flags.a = float(uOAM[fSpriteIndex].BGPrio) / 255;
+        flags.a = float(uOAM[fSpriteIndex].BGPrio) / 255.0;
     }
 
     oColor = col;

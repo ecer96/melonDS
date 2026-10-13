@@ -1,4 +1,12 @@
-#version 140
+#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
+precision highp usampler2D;
+precision highp usampler2DArray;
+precision highp isampler2D;
+precision highp isampler2DArray;
 
 uniform usampler2D ClearBitmapColor;
 uniform usampler2D ClearBitmapDepth;
@@ -8,8 +16,8 @@ uniform uint uOpaquePolyID;
 
 smooth in vec2 fTexcoord;
 
-out vec4 oColor;
-out vec4 oAttr;
+layout(location = 0) out vec4 oColor;
+layout(location = 1) out vec4 oAttr;
 
 void main()
 {

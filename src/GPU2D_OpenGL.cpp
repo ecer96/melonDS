@@ -19,6 +19,7 @@
 #include <assert.h>
 #include "GPU_OpenGL.h"
 #include "GPU2D_OpenGL.h"
+
 #include "GPU.h"
 #include "GPU3D.h"
 
@@ -35,6 +36,19 @@ using Platform::LogLevel;
 #include "OpenGL_shaders/2DSpriteFS.h"
 #include "OpenGL_shaders/2DCompositorVS.h"
 #include "OpenGL_shaders/2DCompositorFS.h"
+
+#include <cstdint>
+// GLES: el DS guarda A1 B5 G5 R5 (bit0=R). GLES quiere R5 G5 B5 A1 (bit0=A).
+static uint16_t TempPalConv[256*(1+(4*16))];
+static inline void Conv1555(const uint16_t* src, uint16_t* dst, int n)
+{
+    for (int i = 0; i < n; i++)
+    {
+        uint16_t c = src[i];
+        uint16_t r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31, a = c >> 15;
+        dst[i] = (uint16_t)((r << 11) | (g << 6) | (b << 1) | a);
+    }
+}
 
 
 
@@ -249,12 +263,12 @@ bool GLRenderer2D::Init()
     glGenTextures(1, &PalTex_BG);
     glBindTexture(GL_TEXTURE_2D, PalTex_BG);
     glDefaultTexParams(GL_TEXTURE_2D);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, 256, 1+(4*16), 0, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, 256, 1+(4*16), 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, nullptr);
 
     glGenTextures(1, &PalTex_OBJ);
     glBindTexture(GL_TEXTURE_2D, PalTex_OBJ);
     glDefaultTexParams(GL_TEXTURE_2D);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, 256, 1+16, 0, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, 256, 1+16, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, nullptr);
 
     // generate texture to hold pre-rendered BG layers
 
@@ -733,8 +747,9 @@ void GLRenderer2D::UpdateAndRender(int line)
         }
 
         glBindTexture(GL_TEXTURE_2D, PalTex_BG);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+(4*16), GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV,
-                        TempPalBuffer);
+        Conv1555(TempPalBuffer, TempPalConv, 256 * (1+(4*16)));
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+(4*16), GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1,
+                        TempPalConv);
     }
 
     GPU.PaletteDirty &= ~palmask;
@@ -788,7 +803,8 @@ void GLRenderer2D::UpdateAndRender(int line)
 
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, PalTex_OBJ);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+16, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, TempPalBuffer);
+        Conv1555(TempPalBuffer, TempPalConv, 256 * (1+16));
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+16, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, TempPalConv);
 
         PrerenderSprites();
 
