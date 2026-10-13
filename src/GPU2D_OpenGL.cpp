@@ -1,3 +1,4 @@
+#include <cstring>
 /*
     Copyright 2016-2026 melonDS team
 
@@ -17,6 +18,8 @@
 */
 
 #include <assert.h>
+#include <time.h> // PERF2 TEMPORAL
+#include "Platform.h"
 #include "GPU_OpenGL.h"
 #include "GPU2D_OpenGL.h"
 
@@ -25,6 +28,120 @@
 
 namespace melonDS
 {
+// ---- PERF2 TEMPORAL ----
+namespace {
+double Perf2Now() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec*1000.0 + ts.tv_nsec/1e6; }
+const char* const kPerf2Names[27] = { "BG_VRAM_upload", "BG_pal_upload", "OBJ_pal_upload", "OBJ_VRAM_upload", "BG_Conv1555", "OBJ_Conv1555", "UpdateAndRender(total)", "PrerenderLayer", "PrerenderSprites", "DoRenderSprites", "RenderScreen", "DrawSprites", "UpdateScanlineConfig", "GLSUB_SCANLINE", "GLSUB_COMPOSITOR", "GLSUB_TEXTURES", "GLSUB_DRAW", "GLSUB_SETUP", "GLSUB_FB", "GLSUB_DISABLE", "GLSUB_MASKS", "GLSUB_VIEWPORT", "GLSUB_SCISSOR", "GLSUB_FB_READ", "GLSUB_FB_DRAW", "GLSUB_USE_PROGRAM", "GLSUB_BIND_UBO"};
+struct Perf2Acc { double total, max; unsigned n; };
+Perf2Acc g_perf2[27];
+
+// Contadores temporales de causas de composicion, separados por motor.
+enum {
+    CC_DISPCNT, CC_LAYER_ENABLE, CC_UNIT_BLANK, CC_BGCNT,
+    CC_BLEND, CC_LAYER_PRE_DIRTY, CC_PARTIAL, CC_FLUSH,
+    CC_SPRITE_ONLY, CC_FLUSH_ZERO, CC_FLUSH_NONZERO, CC_COUNT
+};
+unsigned g_compCause[2][CC_COUNT] = {};
+unsigned g_perf2_ticks = 0;
+unsigned g_blendSamples = 0;
+unsigned g_wrapParamCalls = 0;
+unsigned g_wrapPairsSkipped = 0;
+unsigned g_spriteZeroIntervals = 0;
+unsigned g_spriteIntervals[5] = {};
+unsigned g_spriteLinesTotal = 0;
+
+enum {
+    SPR_CLEAR, SPR_MOSAIC, SPR_WINDOW, SPR_NORMAL,
+    SPR_CPU_BUILD, SPR_BUFFER_UPLOAD, SPR_DRAW, SPR_PROFILE_COUNT
+};
+const char* const kSpriteProfileNames[SPR_PROFILE_COUNT] = {
+    "Sprite_clear", "Sprite_mosaic_pass", "Sprite_window_pass",
+    "Sprite_normal_pass", "Sprite_CPU_build", "Sprite_buffer_upload",
+    "Sprite_draw"
+};
+struct SpriteProfileAcc { double total = 0; unsigned n = 0; };
+SpriteProfileAcc g_spriteProfile[SPR_PROFILE_COUNT];
+
+void SpriteProfileAdd(int id, double ms) {
+    g_spriteProfile[id].total += ms;
+    g_spriteProfile[id].n++;
+}
+
+struct PerfScope2 {
+    int id; double t0;
+    explicit PerfScope2(int i) : id(i), t0(Perf2Now()) {}
+    ~PerfScope2() {
+        double d = Perf2Now() - t0; Perf2Acc& a = g_perf2[id];
+        a.total += d; if (d > a.max) a.max = d; a.n++;
+    }
+};
+void Perf2Tick()
+{
+    // VBlank se llama 2 veces por frame (motor A y B) -> 240 ticks = 120 frames
+    if (++g_perf2_ticks < 240) return;
+    g_perf2_ticks = 0;
+    g_blendSamples = 0;
+    melonDS::Platform::Log(melonDS::Platform::LogLevel::Info,
+        "[GLWRAP] llamadas_glTexParameteri=%.2f/frame pares_omitidos=%.2f/frame llamadas_omitidas=%.2f/frame",
+        (double)g_wrapParamCalls / 120.0,
+        (double)g_wrapPairsSkipped / 120.0,
+        (double)(g_wrapPairsSkipped * 2) / 120.0);
+    g_wrapParamCalls = 0;
+    g_wrapPairsSkipped = 0;
+
+    melonDS::Platform::Log(melonDS::Platform::LogLevel::Info,
+        "[GLINTERVAL] cero=%u 1-2=%u 3-4=%u 5-8=%u 9-16=%u >16=%u lineas=%u",
+        g_spriteZeroIntervals,
+        g_spriteIntervals[0],
+        g_spriteIntervals[1],
+        g_spriteIntervals[2],
+        g_spriteIntervals[3],
+        g_spriteIntervals[4],
+        g_spriteLinesTotal);
+
+    g_spriteZeroIntervals = 0;
+    for (int i = 0; i < 5; i++)
+        g_spriteIntervals[i] = 0;
+    g_spriteLinesTotal = 0;
+
+    for (int i = 0; i < SPR_PROFILE_COUNT; i++) {
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Info,
+            "[GLSPRITE] %-24s %.3f ms/frame",
+            kSpriteProfileNames[i],
+            g_spriteProfile[i].total / 120.0);
+        g_spriteProfile[i].total = 0;
+        g_spriteProfile[i].n = 0;
+    }
+    for (int i = 0; i < 27; i++) {
+        Perf2Acc& a = g_perf2[i];
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Info,
+            "[GLPERF2] %-24s %.2f ms/frame (max %.2f) %.1f llamadas/frame",
+            kPerf2Names[i], a.total/120.0, a.max, (double)a.n/120.0);
+        a.total = 0; a.max = 0; a.n = 0;
+    }
+
+    const char* causeNames[CC_COUNT] = {
+        "DISPCNT", "LayerEnable", "UnitEnabled/ForcedBlank",
+        "BGCnt", "BlendCnt/EVA/EVB/EVY", "layer_pre_dirty",
+        "NeedPartialRender", "RenderScreen", "Sprite-only",
+        "Flush altura cero", "Flush altura positiva"
+    };
+
+    for (int engine = 0; engine < 2; engine++) {
+        for (int c = 0; c < CC_COUNT; c++) {
+            melonDS::Platform::Log(
+                melonDS::Platform::LogLevel::Info,
+                "[GLCAUSE] engine=%d %-25s %.2f/frame",
+                engine, causeNames[c],
+                (double)g_compCause[engine][c] / 120.0
+            );
+            g_compCause[engine][c] = 0;
+        }
+    }
+}
+}
+// ---- FIN PERF2 ----
+
 using Platform::Log;
 using Platform::LogLevel;
 
@@ -66,6 +183,7 @@ GLRenderer2D::GLRenderer2D(melonDS::GPU2D& gpu2D, GLRenderer& parent)
 
 bool GLRenderer2D::InitShaders()
 {
+    CompositorConfigUploaded = false;
     GLint uniloc;
 
     // compile shaders
@@ -295,6 +413,7 @@ bool GLRenderer2D::Init()
         {
             glBindTexture(GL_TEXTURE_2D, AllBGLayerTex[l]);
             glDefaultTexParams(GL_TEXTURE_2D);
+            AllBGLayerWrapMode[l] = GL_CLAMP_TO_EDGE;
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sz[0], sz[1], 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
             glBindFramebuffer(GL_FRAMEBUFFER, AllBGLayerFB[l]);
@@ -366,6 +485,11 @@ bool GLRenderer2D::Init()
     static_assert((sizeof(sCompositorConfig) & 15) == 0);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(sCompositorConfig), nullptr, GL_STREAM_DRAW);
 
+    glGenBuffers(1, &BlendScanlineConfigUBO);
+    glBindBuffer(GL_UNIFORM_BUFFER, BlendScanlineConfigUBO);
+    static_assert((sizeof(sBlendScanlineConfig) & 15) == 0);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(sBlendScanlineConfig), nullptr, GL_STREAM_DRAW);
+
     return true;
 }
 
@@ -411,6 +535,7 @@ GLRenderer2D::~GLRenderer2D()
     glDeleteBuffers(1, &ScanlineConfigUBO);
     glDeleteBuffers(1, &SpriteScanlineConfigUBO);
     glDeleteBuffers(1, &CompositorConfigUBO);
+    glDeleteBuffers(1, &BlendScanlineConfigUBO);
 }
 
 void GLRenderer2D::Reset()
@@ -530,6 +655,7 @@ bool GLRenderer2D::IsScreenOn()
 
 void GLRenderer2D::UpdateAndRender(int line)
 {
+    PerfScope2 _ps2(6);
     u32 palmask = 1 << (GPU2D.Num * 2);
 
     // check if any 'critical' registers were modified
@@ -546,6 +672,29 @@ void GLRenderer2D::UpdateAndRender(int line)
     u8 layer_pre_dirty = 0;
     bool comp_dirty = false;
     bool screenon = IsScreenOn();
+    unsigned* cc = g_compCause[GPU2D.Num];
+
+    if (dispcnt_diff & 0x0000E008) cc[CC_DISPCNT]++;
+    if (layer_diff & 0x1F) cc[CC_LAYER_ENABLE]++;
+    if (UnitEnabled != GPU2D.Enabled ||
+        ForcedBlank != GPU2D.ForcedBlank) cc[CC_UNIT_BLANK]++;
+    if ((GPU2D.BlendCnt != BlendCnt) ||
+        (GPU2D.EVA != EVA) ||
+        (GPU2D.EVB != EVB) ||
+        (GPU2D.EVY != EVY))
+    {
+        cc[CC_BLEND]++;
+        if (g_blendSamples < 12)
+        {
+            Log(LogLevel::Info,
+                "[GLBLEND] engine=%d line=%d LastLine=%d height=%d "
+                "BLDCNT=%04X->%04X EVA=%u->%u EVB=%u->%u EVY=%u->%u",
+                GPU2D.Num, line, LastLine, line - LastLine,
+                BlendCnt, GPU2D.BlendCnt,
+                EVA, GPU2D.EVA, EVB, GPU2D.EVB, EVY, GPU2D.EVY);
+            g_blendSamples++;
+        }
+    }
 
     if (dispcnt_diff & 0x8)
         layer_pre_dirty |= 0x1;
@@ -569,15 +718,12 @@ void GLRenderer2D::UpdateAndRender(int line)
         if (layer < 2) mask |= (1 << 13);
         if (bgcnt_diff[layer] & mask)
             layer_pre_dirty |= (1 << layer);
-        if (bgcnt_diff[layer] & (~mask))
+        if (bgcnt_diff[layer] & (~mask)) {
             comp_dirty = true;
+            cc[CC_BGCNT]++;
+        }
     }
 
-    if ((GPU2D.BlendCnt != BlendCnt) ||
-        (GPU2D.EVA != EVA) ||
-        (GPU2D.EVB != EVB) ||
-        (GPU2D.EVY != EVY))
-        comp_dirty = true;
 
     // check if VRAM was modified, and flatten it as needed
 
@@ -654,13 +800,20 @@ void GLRenderer2D::UpdateAndRender(int line)
         }
     }
 
-    if (layer_pre_dirty)
+    if (layer_pre_dirty) {
         comp_dirty = true;
+        cc[CC_LAYER_PRE_DIRTY]++;
+    }
 
-    if (Parent.NeedPartialRender)
+    if (Parent.NeedPartialRender) {
         comp_dirty = true;
+        cc[CC_PARTIAL]++;
+    }
 
     // if needed, render sprites
+
+    if (line > 0 && SpriteDirty && !comp_dirty)
+        cc[CC_SPRITE_ONLY]++;
 
     if ((comp_dirty || SpriteDirty) && (line > 0))
     {
@@ -671,6 +824,13 @@ void GLRenderer2D::UpdateAndRender(int line)
 
     if (comp_dirty && (line > 0))
     {
+        cc[CC_FLUSH]++;
+
+        if (line <= LastLine)
+            cc[CC_FLUSH_ZERO]++;
+        else
+            cc[CC_FLUSH_NONZERO]++;
+
         RenderScreen(LastLine, line);
         LastLine = line;
     }
@@ -726,11 +886,11 @@ void GLRenderer2D::UpdateAndRender(int line)
             }
             int end = i * 32;
 
-            glTexSubImage2D(GL_TEXTURE_2D, 0,
+            { PerfScope2 _p2(0); glTexSubImage2D(GL_TEXTURE_2D, 0,
                             0, start,
                             1024, end - start,
                             GL_RED_INTEGER, GL_UNSIGNED_BYTE,
-                            &vram[start * 1024]);
+                            &vram[start * 1024]); }
         }
     }
 
@@ -747,9 +907,9 @@ void GLRenderer2D::UpdateAndRender(int line)
         }
 
         glBindTexture(GL_TEXTURE_2D, PalTex_BG);
-        Conv1555(TempPalBuffer, TempPalConv, 256 * (1+(4*16)));
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+(4*16), GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1,
-                        TempPalConv);
+{ PerfScope2 _p2(4); Conv1555(TempPalBuffer, TempPalConv, 256 * (1+(4*16))); }
+        { PerfScope2 _p2(1); glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+(4*16), GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1,
+                        TempPalConv); }
     }
 
     GPU.PaletteDirty &= ~palmask;
@@ -803,8 +963,8 @@ void GLRenderer2D::UpdateAndRender(int line)
 
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, PalTex_OBJ);
-        Conv1555(TempPalBuffer, TempPalConv, 256 * (1+16));
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+16, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, TempPalConv);
+{ PerfScope2 _p2(5); Conv1555(TempPalBuffer, TempPalConv, 256 * (1+16)); }
+        { PerfScope2 _p2(2); glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+16, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, TempPalConv); }
 
         PrerenderSprites();
 
@@ -823,6 +983,7 @@ void GLRenderer2D::DrawScanline(u32 line)
 
 void GLRenderer2D::VBlank()
 {
+    Perf2Tick();
     DoRenderSprites(192);
     RenderScreen(LastLine, 192);
 
@@ -837,6 +998,7 @@ void GLRenderer2D::VBlankEnd()
 
 void GLRenderer2D::UpdateScanlineConfig(int line)
 {
+    PerfScope2 _ps2(12);
     auto& cfg = ScanlineConfig.uScanline[line];
 
     // update BG layer coordinates
@@ -935,6 +1097,17 @@ void GLRenderer2D::UpdateScanlineConfig(int line)
 
     u16* pal = (u16*)&GPU.Palette[GPU2D.Num ? 0x400 : 0];
     cfg.BackColor = pal[0];
+
+    // Rellenar el UBO de blend por scanline
+    {
+        auto& blend = BlendScanlineConfig.uLine[line];
+        blend.BlendCnt = GPU2D.BlendCnt;
+        blend.BlendEffect = (GPU2D.BlendCnt >> 6) & 0x3;
+        blend.BlendCoef[0] = GPU2D.EVA;
+        blend.BlendCoef[1] = GPU2D.EVB;
+        blend.BlendCoef[2] = GPU2D.EVY;
+        blend.BlendCoef[3] = 0;
+    }
 
     // mosaic
 
@@ -1560,13 +1733,22 @@ void GLRenderer2D::UpdateCompositorConfig()
     CompositorConfig.uBlendCoef[1] = EVB;
     CompositorConfig.uBlendCoef[2] = EVY;
 
-    glBindBuffer(GL_UNIFORM_BUFFER, CompositorConfigUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CompositorConfig), &CompositorConfig);
+    if (!CompositorConfigUploaded ||
+        ::memcmp(&CompositorConfig, &UploadedCompositorConfig,
+                    sizeof(CompositorConfig)) != 0)
+    {
+        glBindBuffer(GL_UNIFORM_BUFFER, CompositorConfigUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CompositorConfig),
+                        &CompositorConfig);
+        UploadedCompositorConfig = CompositorConfig;
+        CompositorConfigUploaded = true;
+    }
 }
 
 
 void GLRenderer2D::PrerenderSprites()
 {
+    PerfScope2 _ps2(8);
     u16* vtxbuf = SpritePreVtxData;
     int vtxnum = 0;
 
@@ -1610,6 +1792,7 @@ void GLRenderer2D::PrerenderSprites()
 
 void GLRenderer2D::PrerenderLayer(int layer)
 {
+    PerfScope2 _ps2(7);
     auto& cfg = LayerConfig.uBGConfig[layer];
 
     if (cfg.Type >= 6)
@@ -1631,8 +1814,26 @@ void GLRenderer2D::PrerenderLayer(int layer)
 
 void GLRenderer2D::DoRenderSprites(int line)
 {
+    PerfScope2 _ps2(9);
     int ystart = LastSpriteLine;
     int yend = line;
+    int interval = yend - ystart;
+
+    if (interval <= 0)
+        g_spriteZeroIntervals++;
+    else if (interval <= 2)
+        g_spriteIntervals[0]++;
+    else if (interval <= 4)
+        g_spriteIntervals[1]++;
+    else if (interval <= 8)
+        g_spriteIntervals[2]++;
+    else if (interval <= 16)
+        g_spriteIntervals[3]++;
+    else
+        g_spriteIntervals[4]++;
+
+    if (interval > 0)
+        g_spriteLinesTotal += interval;
 
     glUseProgram(SpriteShader);
 
@@ -1674,7 +1875,11 @@ void GLRenderer2D::DoRenderSprites(int line)
     glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_TRUE);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    {
+        double t = Perf2Now();
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        SpriteProfileAdd(SPR_CLEAR, Perf2Now() - t);
+    }
 
     glColorMaski(0, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDepthMask(GL_FALSE);
@@ -1684,13 +1889,21 @@ void GLRenderer2D::DoRenderSprites(int line)
         glUniform1i(SpriteRenderTransULoc, 1);
         glColorMaski(1, GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
 
-        RenderSprites(false, ystart, yend);
+        {
+            double t = Perf2Now();
+            RenderSprites(false, ystart, yend);
+            SpriteProfileAdd(SPR_MOSAIC, Perf2Now() - t);
+        }
     }
 
     glUniform1i(SpriteRenderTransULoc, 0);
     glColorMaski(1, GL_FALSE, GL_FALSE, GL_TRUE, GL_FALSE);
 
-    RenderSprites(true, ystart, yend);
+    {
+        double t = Perf2Now();
+        RenderSprites(true, ystart, yend);
+        SpriteProfileAdd(SPR_WINDOW, Perf2Now() - t);
+    }
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
@@ -1698,7 +1911,11 @@ void GLRenderer2D::DoRenderSprites(int line)
     glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glColorMaski(1, GL_TRUE, GL_TRUE, GL_FALSE, GL_TRUE);
 
-    RenderSprites(false, ystart, yend);
+    {
+        double t = Perf2Now();
+        RenderSprites(false, ystart, yend);
+        SpriteProfileAdd(SPR_NORMAL, Perf2Now() - t);
+    }
 
     glDisable(GL_SCISSOR_TEST);
 }
@@ -1711,6 +1928,7 @@ void GLRenderer2D::RenderSprites(bool window, int ystart, int yend)
             return;
     }
 
+    double cpuBuildStart = Perf2Now();
     u16* vtxbuf = SpriteVtxData;
     int vtxnum = 0;
 
@@ -1760,30 +1978,55 @@ void GLRenderer2D::RenderSprites(bool window, int ystart, int yend)
         }
     }
 
+    SpriteProfileAdd(SPR_CPU_BUILD, Perf2Now() - cpuBuildStart);
     if (vtxnum == 0) return;
 
     glBindBuffer(GL_ARRAY_BUFFER, SpriteVtxBuffer);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, vtxnum * 5 * sizeof(u16), SpriteVtxData);
+    {
+        double t = Perf2Now();
+        glBufferSubData(GL_ARRAY_BUFFER, 0, vtxnum * 5 * sizeof(u16), SpriteVtxData);
+        SpriteProfileAdd(SPR_BUFFER_UPLOAD, Perf2Now() - t);
+    }
 
     glBindVertexArray(SpriteVtxArray);
-    glDrawArrays(GL_TRIANGLES, 0, vtxnum);
+    {
+        double t = Perf2Now();
+        glDrawArrays(GL_TRIANGLES, 0, vtxnum);
+        SpriteProfileAdd(SPR_DRAW, Perf2Now() - t);
+    }
 }
 
 void GLRenderer2D::RenderScreen(int ystart, int yend)
 {
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, OutputFB);
-
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_STENCIL_TEST);
-    glDisable(GL_BLEND);
-    glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glDepthMask(GL_FALSE);
-
-    glViewport(0, 0, ScreenW, ScreenH);
-
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(0, ystart * ScaleFactor, ScreenW, (yend-ystart) * ScaleFactor);
+    PerfScope2 _ps2(10);
+    {
+        PerfScope2 _p2(23);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    }
+    {
+        PerfScope2 _p2(24);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, OutputFB);
+    }
+    {
+        PerfScope2 _p2(19);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_BLEND);
+    }
+    {
+        PerfScope2 _p2(20);
+        glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthMask(GL_FALSE);
+    }
+    {
+        PerfScope2 _p2(21);
+        glViewport(0, 0, ScreenW, ScreenH);
+    }
+    {
+        PerfScope2 _p2(22);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, ystart * ScaleFactor, ScreenW, (yend-ystart) * ScaleFactor);
+    }
 
     if (ForcedBlank || !UnitEnabled)
     {
@@ -1803,55 +2046,108 @@ void GLRenderer2D::RenderScreen(int ystart, int yend)
         return;
     }
 
-    glUseProgram(CompositorShader);
-
-    glBindBufferBase(GL_UNIFORM_BUFFER, 20, LayerConfigUBO);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 22, ScanlineConfigUBO);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 23, CompositorConfigUBO);
-
-    glBindBuffer(GL_UNIFORM_BUFFER, ScanlineConfigUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER,
-                    ystart * sizeof(sScanlineConfig::sScanline),
-                    (yend - ystart) * sizeof(sScanlineConfig::sScanline),
-                    &ScanlineConfig.uScanline[ystart]);
-
-    UpdateCompositorConfig();
-
-    for (int i = 0; i < 4; i++)
     {
-        glActiveTexture(GL_TEXTURE0 + i);
-
-        if ((i == 0) && (DispCnt & (1<<3)))
-            glBindTexture(GL_TEXTURE_2D, Parent.OutputTex3D);
-        else
-            glBindTexture(GL_TEXTURE_2D, BGLayerTex[i]);
-
-        GLint wrapmode = LayerConfig.uBGConfig[i].Clamp ? GL_CLAMP_TO_BORDER : GL_REPEAT;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapmode);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapmode);
+        PerfScope2 _p2(25);
+        glUseProgram(CompositorShader);
     }
 
-    glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, OBJLayerTex);
+    {
+        PerfScope2 _p2(26);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 20, LayerConfigUBO);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 22, ScanlineConfigUBO);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 23, CompositorConfigUBO);
+    }
 
-    glActiveTexture(GL_TEXTURE5);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, Parent.CaptureOutput128Tex);
+    {
+        PerfScope2 _p2(13);
+        glBindBuffer(GL_UNIFORM_BUFFER, ScanlineConfigUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER,
+                        ystart * sizeof(sScanlineConfig::sScanline),
+                        (yend - ystart) * sizeof(sScanlineConfig::sScanline),
+                        &ScanlineConfig.uScanline[ystart]);
 
-    glActiveTexture(GL_TEXTURE6);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, Parent.CaptureOutput256Tex);
+    {
+        glBindBufferBase(GL_UNIFORM_BUFFER, 25, BlendScanlineConfigUBO);
+        glBindBuffer(GL_UNIFORM_BUFFER, BlendScanlineConfigUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER,
+                        ystart * sizeof(sBlendScanlineConfig::sBlendScanline),
+                        (yend - ystart) * sizeof(sBlendScanlineConfig::sBlendScanline),
+                        &BlendScanlineConfig.uLine[ystart]);
+    }
+    }
 
-    glActiveTexture(GL_TEXTURE7);
-    glBindTexture(GL_TEXTURE_2D, MosaicTex);
+    {
+        PerfScope2 _p2(14);
+        UpdateCompositorConfig();
+    }
+
+    {
+        PerfScope2 _p2(15);
+        for (int i = 0; i < 4; i++)
+        {
+            glActiveTexture(GL_TEXTURE0 + i);
+
+            bool use3D = (i == 0) && (DispCnt & (1<<3));
+            GLuint tex = use3D ? Parent.OutputTex3D : BGLayerTex[i];
+            glBindTexture(GL_TEXTURE_2D, tex);
+
+            GLint wrapmode = LayerConfig.uBGConfig[i].Clamp ? GL_CLAMP_TO_BORDER : GL_REPEAT;
+
+            int cacheIndex = -1;
+            if (!use3D)
+            {
+                for (int j = 0; j < 22; j++)
+                {
+                    if (AllBGLayerTex[j] == tex)
+                    {
+                        cacheIndex = j;
+                        break;
+                    }
+                }
+            }
+
+            if (cacheIndex < 0 || AllBGLayerWrapMode[cacheIndex] != wrapmode)
+            {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapmode);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapmode);
+                g_wrapParamCalls += 2;
+
+                if (cacheIndex >= 0)
+                    AllBGLayerWrapMode[cacheIndex] = wrapmode;
+            }
+            else
+            {
+                g_wrapPairsSkipped++;
+            }
+        }
+
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, OBJLayerTex);
+
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, Parent.CaptureOutput128Tex);
+
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, Parent.CaptureOutput256Tex);
+
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, MosaicTex);
+
+    }
 
     glBindBuffer(GL_ARRAY_BUFFER, Parent.RectVtxBuffer);
     glBindVertexArray(Parent.RectVtxArray);
-    glDrawArrays(GL_TRIANGLES, 0, 2*3);
+    {
+        PerfScope2 _p2(16);
+        glDrawArrays(GL_TRIANGLES, 0, 2*3);
+    }
 
     glDisable(GL_SCISSOR_TEST);
 }
 
 void GLRenderer2D::DrawSprites(u32 line)
 {
+    PerfScope2 _ps2(11);
     u32 oammask = 1 << GPU2D.Num;
     bool dirty = false;
     bool screenon = IsScreenOn();
@@ -1904,11 +2200,11 @@ void GLRenderer2D::DrawSprites(u32 line)
         }
         int end = i * 32;
 
-        glTexSubImage2D(GL_TEXTURE_2D, 0,
+        { PerfScope2 _p2(3); glTexSubImage2D(GL_TEXTURE_2D, 0,
                         0, start,
                         1024, end - start,
                         GL_RED_INTEGER, GL_UNSIGNED_BYTE,
-                        &vram[start * 1024]);
+                        &vram[start * 1024]); }
         dirty = true;
     }
 

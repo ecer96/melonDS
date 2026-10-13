@@ -74,6 +74,7 @@ private:
 
     GLuint CompositorShader;
     GLuint CompositorConfigUBO;
+    GLuint BlendScanlineConfigUBO;
     GLint CompositorScaleULoc;
 
     // base index for a BG layer within the BG texture arrays
@@ -97,6 +98,7 @@ private:
 
     GLuint AllBGLayerFB[22];
     GLuint AllBGLayerTex[22];
+    GLint AllBGLayerWrapMode[22];
 
     GLuint BGLayerFB[4];
     GLuint BGLayerTex[4];
@@ -173,6 +175,17 @@ private:
         s32 uMosaicLine[192];
     } SpriteScanlineConfig;
 
+    struct sBlendScanlineConfig
+    {
+        struct sBlendScanline
+        {
+            u32 BlendCnt;
+            u32 BlendEffect;
+            u32 BlendCoef[4];
+            u32 __pad[2];
+        } uLine[192];
+    } BlendScanlineConfig;
+
     struct sCompositorConfig
     {
         u32 uBGPrio[4];
@@ -182,6 +195,8 @@ private:
         u32 uBlendEffect;
         u32 uBlendCoef[4];
     } CompositorConfig;
+    sCompositorConfig UploadedCompositorConfig;
+    bool CompositorConfigUploaded = false;
 
     int LastLine;
 

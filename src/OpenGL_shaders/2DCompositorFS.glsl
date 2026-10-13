@@ -57,6 +57,18 @@ layout(std140) uniform ubCompositorConfig
     ivec3 uBlendCoef;
 };
 
+struct sBlendScanline
+{
+    int BlendCnt;
+    int BlendEffect;
+    ivec4 BlendCoef;
+};
+
+layout(std140) uniform ubBlendScanlineConfig
+{
+    sBlendScanline uBlendLine[192];
+};
+
 uniform int uScaleFactor;
 
 smooth in vec4 fTexcoord;
@@ -333,9 +345,9 @@ vec4 CompositeLayers()
     }
 
     int effect = 0;
-    int eva, evb, evy = uBlendCoef[2];
+    int eva, evb, evy = uBlendLine[line].BlendCoef[2];
 
-    if (specialcase && (uBlendCnt & mask2) != 0)
+    if (specialcase && (uBlendLine[line].BlendCnt & mask2) != 0)
     {
         if (mask1 == (1<<0))
         {
@@ -348,8 +360,8 @@ vec4 CompositeLayers()
         {
             // semi-transparent sprite
             effect = 1;
-            eva = uBlendCoef[0];
-            evb = uBlendCoef[1];
+            eva = uBlendLine[line].BlendCoef[0];
+            evb = uBlendLine[line].BlendCoef[1];
         }
         else //if (objflags.r == 2)
         {
@@ -359,15 +371,15 @@ vec4 CompositeLayers()
             evb = 16 - eva;
         }
     }
-    else if (((uBlendCnt & mask1) != 0) && ((winsel & (1u << 5)) != 0u))
+    else if (((uBlendLine[line].BlendCnt & mask1) != 0) && ((winsel & (1u << 5)) != 0u))
     {
-        effect = uBlendEffect;
+        effect = uBlendLine[line].BlendEffect;
         if (effect == 1)
         {
-            if ((uBlendCnt & mask2) != 0)
+            if ((uBlendLine[line].BlendCnt & mask2) != 0)
             {
-                eva = uBlendCoef[0];
-                evb = uBlendCoef[1];
+                eva = uBlendLine[line].BlendCoef[0];
+                evb = uBlendLine[line].BlendCoef[1];
             }
             else
                 effect = 0;
